@@ -199,6 +199,56 @@ describe('detectFurniture: page-tracking mixed headers (P30 B)', () => {
   })
 })
 
+describe('detectFurniture: every number of a page-number header, on every page', () => {
+  const five = (text: (i: number) => string) =>
+    detectFurniture([0, 1, 2, 3, 4].map((i) => pageOf(i, header(text(i)), body(`Body ${i}`))))
+
+  it('keeps a court filing stamp whose PageID runs alongside the page in the body', () => {
+    const { drop, droppedLines, hf } = five(
+      (i) =>
+        `Case 2:20-cv-01234 Document 45 Filed 03/12/21 Page ${i + 1} of 5 PageID #:${1230 + i}`,
+    )
+    expect(hf).toEqual([])
+    expect(droppedLines).toBe(0)
+    expect(drop.every((s) => s.size === 0)).toBe(true)
+  })
+
+  it('keeps a header whose second number varies off the sampled pages in the body', () => {
+    const { drop, droppedLines, hf } = five((i) => `Page ${i + 1} Item ${[1, 7, 3, 9, 5][i]}`)
+    expect(hf).toEqual([])
+    expect(droppedLines).toBe(0)
+    expect(drop.every((s) => s.size === 0)).toBe(true)
+  })
+
+  it('keeps a zero-padded page counter, which a PAGE field cannot print, in the body', () => {
+    const { drop, droppedLines, hf } = five((i) => `ACME00000${i + 1} Page ${i + 1}`)
+    expect(hf).toEqual([])
+    expect(droppedLines).toBe(0)
+    expect(drop.every((s) => s.size === 0)).toBe(true)
+  })
+
+  it('keeps a constant number as text and marks the page number', () => {
+    const { drop, droppedLines, hf } = five((i) => `Part 1 Page ${i + 1}`)
+    expect(hf.map((h) => h.text)).toEqual([`Part 1 Page ${HF_PAGE_MARK}`])
+    expect(droppedLines).toBe(5)
+    expect(drop.every((s) => s.size > 0)).toBe(true)
+  })
+
+  it('marks every run that equals the page number on every page', () => {
+    const { droppedLines, hf } = five((i) => `REF${i + 1} Page ${i + 1} of the 2021 report`)
+    expect(hf.map((h) => h.text)).toEqual([
+      `REF${HF_PAGE_MARK} Page ${HF_PAGE_MARK} of the 2021 report`,
+    ])
+    expect(droppedLines).toBe(5)
+  })
+
+  it('marks the page number in both languages of a bilingual header', () => {
+    const { droppedLines, hf } = five((i) => `Page ${i + 1} / Seite ${i + 1}`)
+    expect(hf.map((h) => h.text)).toEqual([`Page ${HF_PAGE_MARK} / Seite ${HF_PAGE_MARK}`])
+    expect(droppedLines).toBe(5)
+  })
+})
+
 describe('detectFurniture: keepUnemitted (cell-data)', () => {
   const line = (text: string, y: number) => mkText(text, 72, { y }).chars
   // three repeated top-band slots: the 2-per-band hf cap seats Alpha + Beta,

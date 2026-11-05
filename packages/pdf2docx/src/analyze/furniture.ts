@@ -156,14 +156,14 @@ const lineText = (chars: readonly PdfChar[]): string =>
     .replace(/\s+/g, ' ')
     .trim()
 
-/** digit runs (ASCII value, index, length) of a line's text; fullwidth folded */
-function digitRuns(text: string): Array<{ value: number; index: number; length: number }> {
-  const out: Array<{ value: number; index: number; length: number }> = []
+/** digit runs (ASCII digits, index, length) of a line's text; fullwidth folded */
+function digitRuns(text: string): Array<{ digits: string; index: number; length: number }> {
+  const out: Array<{ digits: string; index: number; length: number }> = []
   for (const m of text.matchAll(/[0-9０-９]+/g)) {
-    const ascii = [...m[0]]
+    const digits = [...m[0]]
       .map((d) => String.fromCharCode(d.charCodeAt(0) - (d >= '０' ? 0xfee0 : 0)))
       .join('')
-    out.push({ value: parseInt(ascii, 10), index: m.index!, length: m[0].length })
+    out.push({ digits, index: m.index!, length: m[0].length })
   }
   return out
 }
@@ -194,32 +194,27 @@ function hfShell(
 }
 
 /**
- * A page-number slot as an HF entry: every digit run that counts the physical
- * page (value === page+1 on every probe) becomes HF_PAGE_MARK — a run left
- * as text would repeat the representative page's number on every page. Slots
- * whose numbers do not track the physical page (offset numbering, roman)
- * stay un-emittable — reproducing them wrong is worse than omitting them.
+ * A page-number slot as an HF entry, its digit runs classified on every line:
+ * a run written the same on every line stays text, a run printed as the
+ * physical page number on every line (as a PAGE field prints it, unpadded)
+ * becomes HF_PAGE_MARK. Any other run (offset or padded numbering, a counter
+ * that does not follow the page, roman) leaves the slot un-emittable —
+ * reproducing it wrong is worse than omitting it.
  */
 function pageNoHf(band: 'top' | 'bottom', slot: Slot, firstTextPage: number): FurnitureHf | null {
-  const samples = [...slot.lines].sort((a, b) => a.page - b.page)
-  const probes = [
-    samples[0]!,
-    samples[Math.floor(samples.length / 2)]!,
-    samples[samples.length - 1]!,
-  ]
-  const runsPer = probes.map((l) => ({
-    l,
-    text: lineText(l.chars),
-    runs: digitRuns(lineText(l.chars)),
-  }))
-  const n = runsPer[0]!.runs.length
-  if (n === 0 || runsPer.some((r) => r.runs.length !== n)) return null
+  const lines = [...slot.lines]
+    .sort((a, b) => a.page - b.page)
+    .map((l) => ({ l, text: lineText(l.chars), runs: digitRuns(lineText(l.chars)) }))
+  const rep = lines[0]!
+  const n = rep.runs.length
+  if (n === 0 || lines.some((r) => r.runs.length !== n)) return null
   const tracking: number[] = []
   for (let i = 0; i < n; i++) {
-    if (runsPer.every(({ l, runs }) => runs[i]!.value === l.page + 1)) tracking.push(i)
+    if (lines.every(({ runs }) => runs[i]!.digits === rep.runs[i]!.digits)) continue
+    if (!lines.every(({ l, runs }) => runs[i]!.digits === String(l.page + 1))) return null
+    tracking.push(i)
   }
   if (tracking.length === 0) return null
-  const rep = runsPer[0]!
   if (rep.text.length > HF_MAX_TEXT_LEN || HAS_RTL_RE.test(rep.text)) return null
   let text = rep.text
   for (const i of tracking.reverse()) {
@@ -327,8 +322,8 @@ export function detectFurniture(
     }
     // page-tracking mixed headers (P30 B): "Form X (Rev. …) Page N" repeats
     // with a varying page number, so the verbatim pass above never groups it.
-    // Digit-masked grouping + the pageNoHf tracking proof (some digit run
-    // equals the physical page number on every probe) identifies it without
+    // Digit-masked grouping + the pageNoHf tracking proof (every digit run is
+    // constant or the physical page number on every line) identifies it without
     // reviving the digit-normalized false merges ("Form No.1" vs "No.2"
     // captions do not track the page and stay apart).
     const masked = band
